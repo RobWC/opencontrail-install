@@ -1,0 +1,87 @@
+#!/usr/bin/env ansible-playbook
+
+####
+- name: Install Contrail controller
+  hosts: controller_nodes
+  tags: controller
+  vars:
+    server_list: "{{ groups['controller_nodes'] }}"
+  vars_files:
+    - vars.yml
+
+  pre_tasks:
+    - include: tasks/pre-tasks.yml
+
+  roles:
+    - role: contrail-database
+    - role: contrail-config
+    - role: contrail-analytics
+    - role: contrail-control
+    - role: contrail-webui
+
+  post_tasks:
+    - name: Waiting for Cassandra to run...
+      wait_for: port=9160 host="{{host_contrail_address }}"
+
+    - name: Waiting for RabbitMQ to run...
+      wait_for: port=5672 host="{{host_contrail_address }}"
+
+    - name: Waiting for configuration API to run...
+      wait_for: port=8082 host="{{host_contrail_address }}"
+
+    - name: Waiting for analytics API to run...
+      wait_for: port=8081 host="{{host_contrail_address }}"
+
+    - include: tasks/provision-config.yml
+    - include: tasks/provision-control.yml
+    - include: tasks/provision-analytics.yml
+    - include: tasks/provision-database.yml
+
+
+####
+- name: Install Contrail vrouter
+  hosts: vrouter_nodes
+  tags: vrouter
+  vars_files:
+    - vars.yml
+
+  pre_tasks:
+    - include: tasks/pre-tasks.yml
+
+  roles:
+    - role: contrail-vrouter
+
+  post_tasks:
+    - name: Check vhost interface.
+      stat: path=/etc/sysconfig/network-scripts/ifcfg-vhost0
+      register: vhost_status
+
+    - include: tasks/provision-vrouter.yml
+      when: vhost_status.stat.exists == False
+
+    - name: Reboot...
+      shell: sleep 2 && reboot
+      async: 1
+      poll: 0
+      when: vhost_status.stat.exists == False
+
+    #- name: Waiting upto 5 minutes for server to come back...
+    #  local_action: wait_for host="{{ inventory_hostname }}" port=22 delay=60 connect_timeout=20 timeout=300
+
+####
+- name: Test
+  hosts: controller_nodes
+  tags: test
+  vars:
+    server_list: "{{ groups['controller_nodes'] }}"
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Waiting for Cassandra to run...
+      wait_for: port=9160 host="{{host_contrail_address }}"
+    - debug: var=ansible_os_family
+    - debug: var=ansible_pkg_mgr
+    - debug: var=ansible_lsb
+    - debug: var=ansible_distribution
+
